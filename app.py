@@ -1,59 +1,82 @@
-import logging
-import queue
-from pathlib import Path
-from typing import List, NamedTuple
-
-import av
 import cv2
 import numpy as np
+import av
 import streamlit as st
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
-
 import mediapipe as mp
+import paho.mqtt.client as mqtt
 
-logger = logging.getLogger(__name__)
-
+# Inicializar MediaPipe Hands
 mp_hands = mp.solutions.hands
 mp_draw = mp.solutions.drawing_utils
+hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7)
 
-hands = mp_hands.Hands(static_image_mode=False,
-                       max_num_hands=2,
-                       min_detection_confidence=0.5,
-                       min_tracking_confidence=0.5)
+# MQTT
+MQTT_BROKER = "broker.hivemq.com"
+MQTT_PORT = 1883
+MQTT_TOPIC = "streamlit/gesto"
 
-class HandLandmark(NamedTuple):
-    hand_index: int
-    landmarks: List[tuple]
+client = mqtt.Client()
+client.connect(MQTT_BROKER, MQTT_PORT, 60)
 
-result_queue: "queue.Queue[List[HandLandmark]]" = queue.Queue()
+def detectar_gesto(landmarks):
+    dedos_estirados = []
+    tips_ids = [4, 8, 12, 16, 20]
+
+    # Pulgar (eje X)
+    if landmarks[4][0] > landmarks[3][0]:
+        dedos_estirados.append(True)
+    else:
+        dedos_estirados.append(False)
+
+    # Otros dedos (eje Y)
+    for i in [8, 12, 16, 20]:
+        if landmarks[i][1] < landmarks[i - 2][1]:
+            dedos_estirados.append(True)
+        else:
+            dedos_estirados.append(False)
+
+    if dedos_estirados == [False, False, False, False, False]:
+        return "Puño cerrado ✊"
+    elif dedos_estirados == [True, True, True, True, True]:
+        return "Palma abierta 🖐"
+    elif (
+        np.linalg.norm(np.array(landmarks[4][:2]) - np.array(landmarks[8][:2])) < 0.05
+        and all(dedos_estirados[i] for i in [2, 3, 4])
+    ):
+        return "Gesto OK 👌"
+    else:
+        return None
 
 def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
     image = frame.to_ndarray(format="bgr24")
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     results = hands.process(image_rgb)
 
-    hand_data = []
+    gesture_text = ""
 
     if results.multi_hand_landmarks:
-        for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
+        for hand_landmarks in results.multi_hand_landmarks:
             mp_draw.draw_landmarks(image, hand_landmarks, mp_hands.HAND_CONNECTIONS)
             landmarks = [(lm.x, lm.y, lm.z) for lm in hand_landmarks.landmark]
-            hand_data.append(HandLandmark(idx, landmarks))
 
-    result_queue.put(hand_data)
+            gesto = detectar_gesto(landmarks)
+            if gesto:
+                gesture_text = gesto
+                # Enviar mensaje MQTT
+                client.publish(MQTT_TOPIC, gesto)
+
+    if gesture_text:
+        cv2.putText(image, gesture_text, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+
     return av.VideoFrame.from_ndarray(image, format="bgr24")
 
-webrtc_ctx = webrtc_streamer(
-    key="gesture-detection",
+# Interfaz Streamlit
+st.title("Detector de Gestos con MQTT 🖐✊👌")
+webrtc_streamer(
+    key="gesture",
     mode=WebRtcMode.SENDRECV,
     video_frame_callback=video_frame_callback,
     media_stream_constraints={"video": True, "audio": False},
     async_processing=True,
 )
-
-if st.checkbox("Mostrar landmarks detectados"):
-    if webrtc_ctx.state.playing:
-        labels_placeholder = st.empty()
-        while True:
-            hand_results = result_queue.get()
-            labels_placeholder.write(f"Manos detectadas: {len(hand_results)}")
