@@ -1,7 +1,15 @@
-streamlit>=1.22.0
-streamlit-webrtc>=0.45.0
-opencv-python-headless>=4.7.0
+# Core libraries
+streamlit>=1.20.0
 numpy>=1.22.0
-TensorFlow >= 2.13
-Pillow>=9.5.0
-av>=10.0.0
+opencv-python-headless>=4.5.5
+Pillow>=9.0.0
+
+# For OCR functionality
+pytesseract>=0.3.9
+
+# For deep learning model
+tensorflow>=2.9.0
+keras>=2.9.0
+
+# Optional: for better performance with image processing
+matplotlib>=3.5.0
