@@ -12,11 +12,10 @@ mp_draw = mp.solutions.drawing_utils
 hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7)
 
 # MQTT
-MQTT_BROKER = "test.mosquitto.org"  # Broker público de Mosquitto
-MQTT_PORT = 1883  # Puerto estándar de MQTT
+MQTT_BROKER = "broker.hivemq.com"
+MQTT_PORT = 1883
 MQTT_TOPIC = "streamlit/gesto"
 
-# Inicializar el cliente MQTT (solo una vez)
 client = mqtt.Client()
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
 
@@ -81,7 +80,3 @@ webrtc_streamer(
     media_stream_constraints={"video": True, "audio": False},
     async_processing=True,
 )
-
-# Cerrar el cliente MQTT cuando la aplicación termine (cuando el script se cierre o reinicie)
-client.loop_stop()
-client.disconnect()
