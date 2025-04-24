@@ -4,3 +4,4 @@ opencv-python-headless
 av
 mediapipe
 numpy
+paho-mqtt
