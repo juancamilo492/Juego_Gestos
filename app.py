@@ -55,6 +55,10 @@ gesture_placeholder = st.empty()
 
 def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
     image = frame.to_ndarray(format="bgr24")
+    
+    # Rotar horizontalmente (flip) para corregir la orientación en dispositivos móviles
+    image = cv2.flip(image, 1)
+
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     results = hands.process(image_rgb)
 
