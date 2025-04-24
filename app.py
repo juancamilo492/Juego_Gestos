@@ -16,6 +16,7 @@ MQTT_BROKER = "test.mosquitto.org"  # Broker público de Mosquitto
 MQTT_PORT = 1883  # Puerto estándar de MQTT
 MQTT_TOPIC = "streamlit/gesto"
 
+# Inicializar el cliente MQTT (solo una vez)
 client = mqtt.Client()
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
 
@@ -80,3 +81,7 @@ webrtc_streamer(
     media_stream_constraints={"video": True, "audio": False},
     async_processing=True,
 )
+
+# Cerrar el cliente MQTT cuando la aplicación termine (cuando el script se cierre o reinicie)
+client.loop_stop()
+client.disconnect()
