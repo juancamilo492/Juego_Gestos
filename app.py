@@ -11,17 +11,13 @@ mp_hands = mp.solutions.hands
 mp_draw = mp.solutions.drawing_utils
 hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7)
 
-# MQTT configuración
+# MQTT
 MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
 MQTT_TOPIC = "streamlit/gesto"
 
 client = mqtt.Client()
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
-
-# Estado del último gesto enviado
-if "ultimo_gesto" not in st.session_state:
-    st.session_state["ultimo_gesto"] = None
 
 def detectar_gesto(landmarks):
     dedos_estirados = []
@@ -67,9 +63,8 @@ def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
             gesto = detectar_gesto(landmarks)
             if gesto:
                 gesture_text = gesto
-                if st.session_state["ultimo_gesto"] != gesto:
-                    client.publish(MQTT_TOPIC, gesto)
-                    st.session_state["ultimo_gesto"] = gesto
+                # Enviar mensaje MQTT
+                client.publish(MQTT_TOPIC, gesto)
 
     if gesture_text:
         cv2.putText(image, gesture_text, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
