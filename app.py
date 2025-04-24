@@ -3,11 +3,12 @@ import numpy as np
 import cv2
 import pytesseract
 from PIL import Image
-from keras.models import load_model
 import streamlit.components.v1 as components
 import time
 import base64
-from io import BytesIO  # Added missing import
+from io import BytesIO
+import tensorflow.keras as keras
+from tensorflow.keras.models import load_model
 
 # Carga del modelo
 model = load_model('keras_model.h5')
