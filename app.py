@@ -1,208 +1,224 @@
-"""Gesture recognition demo with Teachable Machine model.
-Based on WebRTC streaming for real-time processing.
-"""
-
-import logging
-import queue
-from pathlib import Path
-from typing import List, NamedTuple
-
-import av
-import cv2
-import numpy as np
 import streamlit as st
-from streamlit_webrtc import WebRtcMode, webrtc_streamer
-from tensorflow import keras
+import numpy as np
+import cv2
+import pytesseract
+from PIL import Image
+from keras.models import load_model
+import streamlit.components.v1 as components
+import time
+import base64
+from io import BytesIO  # Added missing import
 
-HERE = Path(__file__).parent
-ROOT = HERE
+# Carga del modelo
+model = load_model('keras_model.h5')
+data = np.ndarray(shape=(1, 224, 224, 3), dtype=np.float32)
 
-logger = logging.getLogger(__name__)
+st.title("Reconocimiento de Gestos en Tiempo Real")
 
-# Definición de las clases para los gestos
-GESTURE_CLASSES = [
-    "Palma",
-    "Ok",
-    "JCBG",
-    "Vacío"
-]
-
-class Detection(NamedTuple):
-    class_id: int
-    label: str
-    score: float
-
-
-@st.cache_resource  # type: ignore
-def generate_label_colors():
-    return np.random.uniform(0, 255, size=(len(GESTURE_CLASSES), 3))
-
-
-COLORS = generate_label_colors()
-
-# Cargar el modelo al inicio
-@st.cache_resource  # type: ignore
-def load_keras_model():
-    return keras.models.load_model('keras_model.h5')
-
-st.title("Reconocimiento de Gestos en tiempo real")
-
+# Barra lateral con información
 with st.sidebar:
-    st.subheader("Usa un modelo entrenado en Teachable Machine para identificar gestos en tiempo real")
-    score_threshold = st.slider("Umbral de confianza", 0.0, 1.0, 0.5, 0.05)
-    filtro = st.radio("Aplicar Filtro", ('Con Filtro', 'Sin Filtro'))
-
-# Cargar modelo
-try:
-    # Session-specific caching
-    cache_key = "gesture_recognition_model"
-    if cache_key in st.session_state:
-        model = st.session_state[cache_key]
-    else:
-        model = load_keras_model()
-        st.session_state[cache_key] = model
+    st.subheader("Usa un modelo entrenado en Teachable Machine para identificar gestos en tiempo real, e inclusive reconoce texto si lo hay")
+    filtro = st.radio("Aplicar Filtro", ('Sin Filtro', 'Con Filtro'))
+    fps = st.slider("Frames por segundo", min_value=1, max_value=30, value=10)
+    confidence_threshold = st.slider("Umbral de confianza", min_value=0.1, max_value=1.0, value=0.5, step=0.05)
+    show_ocr = st.checkbox("Activar reconocimiento de texto (OCR)", value=False)
     
-    model_loaded = True
-except Exception as e:
-    st.error(f"Error al cargar el modelo: {str(e)}")
-    st.info("Asegúrate de que el archivo 'keras_model.h5' esté en el mismo directorio que este script.")
-    model_loaded = False
+    # Botones para iniciar y detener la transmisión
+    start_button = st.button("Iniciar Cámara")
+    stop_button = st.button("Detener Cámara")
 
-# NOTE: La callback se ejecutará en otro hilo,
-#       así que utilizamos una cola para garantizar la seguridad entre hilos
-#       al pasar datos desde el interior hacia el exterior de la callback.
-result_queue: "queue.Queue[List[Detection]]" = queue.Queue()
+# Contenedores para mostrar los resultados
+video_container = st.empty()
+result_container = st.empty()
+text_container = st.empty()
 
-
-def normalize_image(img_array):
-    """Normaliza la imagen al formato requerido por el modelo."""
-    # Redimensionar a 224x224
-    resized = cv2.resize(img_array, (224, 224))
-    # Normalizar de 0-255 a -1 - 1
-    normalized = (resized.astype(np.float32) / 127.0) - 1
-    return normalized
-
-
-def apply_filter(image, filtro_option):
-    """Aplica un filtro a la imagen si está seleccionado."""
-    if filtro_option == 'Con Filtro':
+# Función para aplicar el filtro a la imagen
+def apply_filter(image, filtro):
+    if filtro == 'Con Filtro':
         return cv2.bitwise_not(image)
     return image
 
-
-def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
-    image = frame.to_ndarray(format="bgr24")
+# Función para normalizar la imagen
+def normalize_image(img_array):
+    # Redimensionar a 224x224
+    img_array = cv2.resize(img_array, (224, 224))
     
-    # Aplicar filtro si está seleccionado
-    filtered_image = apply_filter(image.copy(), filtro)
+    # Asegurarse de que la imagen es RGB
+    if len(img_array.shape) == 2:
+        img_array = np.stack([img_array] * 3, axis=-1)
+    elif img_array.shape[2] == 4:  # Si tiene canal alpha
+        img_array = img_array[:, :, :3]
+        
+    # Normalizar valores
+    normalized_image_array = (img_array.astype(np.float32) / 127.0) - 1
+    return normalized_image_array
+
+# Función para realizar la predicción
+def predict_image(image_array):
+    data[0] = image_array
+    prediction = model.predict(data)
+    return prediction
+
+# Función para extraer texto de la imagen
+def extract_text_from_image(image):
+    text = pytesseract.image_to_string(image)
+    return text.strip()
+
+# Función para crear un componente HTML que accede a la cámara
+def get_camera_component():
+    html_code = """
+    <div style="text-align: center;">
+        <video id="webcam" autoplay playsinline width="640" height="480" style="transform: scaleX(-1);"></video>
+        <canvas id="canvas" width="640" height="480" style="display: none;"></canvas>
+    </div>
+    <script>
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('canvas');
+        const context = canvas.getContext('2d');
+        
+        // Acceder a la cámara
+        async function setupCamera() {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                'audio': false,
+                'video': {
+                    facingMode: 'user',
+                    width: {ideal: 640},
+                    height: {ideal: 480}
+                }
+            });
+            video.srcObject = stream;
+            
+            return new Promise((resolve) => {
+                video.onloadedmetadata = () => {
+                    resolve(video);
+                };
+            });
+        }
+        
+        // Capturar frame y enviarlo al backend
+        function captureFrame() {
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const imageData = canvas.toDataURL('image/jpeg', 0.8);
+            
+            // Enviar datos al backend de Streamlit
+            window.parent.postMessage({
+                type: 'streamlit:setComponentValue',
+                value: imageData
+            }, '*');
+        }
+        
+        // Configurar y comenzar
+        setupCamera();
+        
+        // Enviar mensaje cuando se carga el componente
+        window.parent.postMessage({
+            type: 'streamlit:componentReady',
+            value: true
+        }, '*');
+    </script>
+    """
+    return components.html(html_code, height=500)
+
+# Estado de la aplicación para controlar la cámara
+if 'camera_active' not in st.session_state:
+    st.session_state.camera_active = False
+
+# Controles para iniciar/detener la cámara
+if start_button:
+    st.session_state.camera_active = True
+if stop_button:
+    st.session_state.camera_active = False
+
+# Mostrar la cámara si está activa
+if st.session_state.camera_active:
+    # Crear el componente de cámara HTML
+    frame_data = get_camera_component()
     
-    if model_loaded:
-        # Preparar la imagen para el modelo
-        normalized_image = normalize_image(filtered_image)
-        
-        # Preparar la entrada para el modelo
-        input_data = np.ndarray(shape=(1, 224, 224, 3), dtype=np.float32)
-        input_data[0] = normalized_image
-        
-        # Realizar predicción
-        prediction = model.predict(input_data, verbose=0)
-        
-        # Procesar resultados
-        detections = []
-        for i, score in enumerate(prediction[0]):
-            if score >= score_threshold:
-                detections.append(
-                    Detection(
-                        class_id=i,
-                        label=GESTURE_CLASSES[i],
-                        score=float(score),
-                    )
-                )
-        
-        # Mostrar resultado en la imagen
-        h, w = image.shape[:2]
-        # Zona para mostrar texto (rectángulo semi-transparente en la parte superior)
-        overlay = image.copy()
-        cv2.rectangle(overlay, (0, 0), (w, 60), (0, 0, 0), -1)
-        image = cv2.addWeighted(overlay, 0.6, image, 0.4, 0)
-        
-        # Mostrar resultados en la imagen
-        if detections:
-            text = " | ".join([f"{det.label}: {det.score:.2f}" for det in detections])
-            cv2.putText(
-                image,
-                text,
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 255, 255),
-                2,
-            )
-        else:
-            cv2.putText(
-                image,
-                "No se detectaron gestos",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 255, 255),
-                2,
-            )
-        
-        result_queue.put(detections)
-    else:
-        # Si el modelo no se cargó correctamente, muestra un mensaje
-        cv2.putText(
-            image,
-            "Error: Modelo no cargado",
-            (10, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (0, 0, 255),
-            2,
-        )
-        result_queue.put([])
-        
-    return av.VideoFrame.from_ndarray(image, format="bgr24")
-
-
-# Solo mostrar el streamer WebRTC si el modelo se cargó correctamente o si queremos mostrar el error en el stream
-webrtc_ctx = webrtc_streamer(
-    key="gesture-recognition",
-    mode=WebRtcMode.SENDRECV,
-    video_frame_callback=video_frame_callback,
-    media_stream_constraints={"video": True, "audio": False},
-    async_processing=True,
-)
-
-if model_loaded and st.checkbox("Mostrar detecciones", value=True):
-    if webrtc_ctx.state.playing:
-        detection_placeholder = st.empty()
-        # NOTA: La transformación de video con detección de gestos y
-        # este bucle que muestra las etiquetas resultantes se ejecutan
-        # en diferentes hilos de forma asíncrona.
-        # Por lo tanto, los frames de video renderizados y las etiquetas mostradas aquí
-        # no están estrictamente sincronizados.
-        while True:
-            try:
-                result = result_queue.get(timeout=1.0)
-                if result:
-                    detection_placeholder.table(result)
+    # Procesar el frame si se recibe datos
+    if frame_data and frame_data.startswith('data:image'):
+        try:
+            # Decodificar la imagen base64
+            _, encoded = frame_data.split(",", 1)
+            binary = base64.b64decode(encoded)
+            
+            # Convertir a imagen numpy
+            img_array = np.array(Image.open(BytesIO(binary)))
+            
+            # Aplicar filtro si está seleccionado
+            img_filtered = apply_filter(img_array, filtro)
+            
+            # Mostrar la imagen procesada
+            video_container.image(img_filtered, channels="RGB", use_column_width=True)
+            
+            # Normalizar para la predicción
+            normalized_image = normalize_image(img_array)
+            
+            # Realizar predicción
+            prediction = predict_image(normalized_image)
+            
+            # Mostrar resultados de la predicción
+            result_text = ""
+            max_index = np.argmax(prediction[0])
+            classes = ["Palma", "Ok", "JCBG", "Vacío"]
+            
+            if prediction[0][max_index] >= confidence_threshold:
+                result_text = f"{classes[max_index]}: {prediction[0][max_index]:.2f}"
+            else:
+                result_text = "Ningún gesto detectado con suficiente confianza."
+                
+            result_container.markdown(f"### {result_text}")
+            
+            # Extraer texto si está activado el OCR
+            if show_ocr:
+                extracted_text = extract_text_from_image(img_filtered)
+                if extracted_text:
+                    text_container.markdown(f"**Texto detectado:** {extracted_text}")
                 else:
-                    detection_placeholder.text("No se detectaron gestos con suficiente confianza")
-            except queue.Empty:
-                detection_placeholder.warning("No se reciben datos. Asegúrate de que la cámara esté funcionando.")
-                break
+                    text_container.markdown("No se detectó texto en la imagen.")
+                    
+            # Controlar FPS
+            time.sleep(1/fps)
+            
+        except Exception as e:
+            st.error(f"Error al procesar la imagen: {e}")
+else:
+    video_container.info("Presiona 'Iniciar Cámara' para comenzar la detección en tiempo real.")
 
-st.markdown(
-    "Esta aplicación utiliza un modelo de reconocimiento de gestos "
-    "entrenado en Teachable Machine y se ejecuta en tiempo real con WebRTC."
-)
+# Añadir código JavaScript para capturar frames continuamente
+if st.session_state.camera_active:
+    js_code = f"""
+    <script>
+        function captureFrames() {{
+            const canvas = document.getElementById('canvas');
+            if (canvas) {{
+                const context = canvas.getContext('2d');
+                const video = document.getElementById('webcam');
+                
+                if (video && video.readyState === 4) {{
+                    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const imageData = canvas.toDataURL('image/jpeg', 0.8);
+                    
+                    window.parent.postMessage({{
+                        type: 'streamlit:setComponentValue',
+                        value: imageData
+                    }}, '*');
+                }}
+            }}
+            setTimeout(captureFrames, {1000/fps});
+        }}
+        
+        // Iniciar la captura después de un breve retraso
+        setTimeout(captureFrames, 1000);
+    </script>
+    """
+    components.html(js_code, height=0)
 
-# Mostrar información sobre posibles problemas
-st.sidebar.subheader("Solución de problemas")
-st.sidebar.markdown("""
-- Si la cámara no funciona, asegúrate de que tu navegador tenga permiso para acceder a ella.
-- Si la transmisión se detiene, actualiza la página.
-- Asegúrate de que el archivo 'keras_model.h5' esté en el mismo directorio que este script.
+# Instrucciones para el usuario
+st.markdown("""
+### Instrucciones
+1. Presiona "Iniciar Cámara" para comenzar el reconocimiento en tiempo real
+2. Muestra tu gesto frente a la cámara
+3. Ajusta la sensibilidad usando el deslizador "Umbral de confianza"
+4. Activa el reconocimiento de texto si necesitas detectar texto en la imagen
+5. Presiona "Detener Cámara" cuando hayas terminado
 """)
