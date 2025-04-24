@@ -1,9 +1,8 @@
 streamlit
+streamlit-webrtc
 opencv-python
-opencv-python-headless
+numpy
 tensorflow
 keras
-numpy
+Pillow
 av
-streamlit-webrtc>=0.61.3
-mesa-libGL
