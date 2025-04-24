@@ -6,7 +6,7 @@ from streamlit_webrtc import WebRtcMode, webrtc_streamer
 import mediapipe as mp
 import paho.mqtt.client as mqtt
 
-# Configuración MediaPipe Hands
+# Configuración de MediaPipe Hands
 mp_hands = mp.solutions.hands
 mp_draw = mp.solutions.drawing_utils
 hands = mp_hands.Hands(
@@ -16,27 +16,41 @@ hands = mp_hands.Hands(
 )
 
 # MQTT
-MQTT_BROKER = "broker.hivemq.com"
+MQTT_BROKER = "test.mosquitto.org"
 MQTT_PORT = 1883
 MQTT_TOPIC = "streamlit/gesto"
-client = mqtt.Client()
-client.connect(MQTT_BROKER, MQTT_PORT, 60)
-client.loop_start()  # Thread para mantener conexión activa
 
+# Inicializar estado de la conexión MQTT
+if "mqtt_status" not in st.session_state:
+    st.session_state.mqtt_status = "Conectando al broker MQTT..."
+
+# Callback para conexión MQTT
+def on_connect(client, userdata, flags, rc):
+    if rc == 0:
+        st.session_state.mqtt_status = "✅ Conexión MQTT exitosa con test.mosquitto.org"
+    else:
+        st.session_state.mqtt_status = f"❌ Error de conexión MQTT (código {rc})"
+
+# Cliente MQTT
+client = mqtt.Client()
+client.on_connect = on_connect
+client.connect(MQTT_BROKER, MQTT_PORT, 60)
+client.loop_start()
+
+# Mostrar estado de conexión en la barra lateral
+st.sidebar.markdown("### Estado de MQTT:")
+st.sidebar.info(st.session_state.mqtt_status)
+
+# Función para detectar gesto
 def detectar_gesto(landmarks):
     dedos_estirados = []
+
     # Pulgar (eje X)
-    if landmarks[4][0] > landmarks[3][0]:
-        dedos_estirados.append(True)
-    else:
-        dedos_estirados.append(False)
+    dedos_estirados.append(landmarks[4][0] > landmarks[3][0])
 
     # Otros dedos (eje Y)
     for i in [8, 12, 16, 20]:
-        if landmarks[i][1] < landmarks[i - 2][1]:
-            dedos_estirados.append(True)
-        else:
-            dedos_estirados.append(False)
+        dedos_estirados.append(landmarks[i][1] < landmarks[i - 2][1])
 
     if dedos_estirados == [False, False, False, False, False]:
         return "Puño cerrado ✊"
@@ -50,9 +64,10 @@ def detectar_gesto(landmarks):
     else:
         return None
 
-# Variable para mostrar el gesto en Streamlit
+# Área de visualización del gesto detectado
 gesture_display = st.empty()
 
+# Procesamiento del video
 def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
     image = frame.to_ndarray(format="bgr24")
     image = cv2.resize(image, (320, 240))  # Resolución reducida
@@ -70,13 +85,12 @@ def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
                 gesture_text = gesto
                 client.publish(MQTT_TOPIC, gesto)
 
-    # Mostrar el texto en Streamlit en lugar de la imagen
     if gesture_text:
         gesture_display.markdown(f"### 👉 Gesto detectado: **{gesture_text}**")
 
     return av.VideoFrame.from_ndarray(image, format="bgr24")
 
-# Interfaz de usuario en Streamlit
+# Interfaz principal de Streamlit
 st.title("Detector de Gestos con MQTT 🖐✊👌")
 webrtc_streamer(
     key="gesture",
