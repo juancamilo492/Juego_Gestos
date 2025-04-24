@@ -12,8 +12,8 @@ mp_draw = mp.solutions.drawing_utils
 hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7)
 
 # MQTT
-MQTT_BROKER = "broker.hivemq.com"
-MQTT_PORT = 1883
+MQTT_BROKER = "test.mosquitto.org"  # Broker público de Mosquitto
+MQTT_PORT = 1883  # Puerto estándar de MQTT
 MQTT_TOPIC = "streamlit/gesto"
 
 client = mqtt.Client()
